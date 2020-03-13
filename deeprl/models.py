@@ -16,6 +16,9 @@ class BasicActorCritic(nn.Module):
         self.pi_module = pi_module
         self.v_module = v_module if v_module is not None else pi_module
 
+        if isinstance(ac_space, gym.spaces.Tuple):
+            ac_space = ac_space.spaces[0]
+
         if isinstance(ac_space, gym.spaces.Box):
             assert len(ac_space.shape) == 1
             n_acs = ac_space.shape[0]
@@ -25,6 +28,8 @@ class BasicActorCritic(nn.Module):
         elif isinstance(ac_space, gym.spaces.Discrete):
             n_acs = ac_space.n
             self.ac_distr = partial(distr.categorical.Categorical, None)
+        else:
+            raise NotImplementedError(f'ac_space {ac_space} must be Discrete or Box')
 
         self.pi_head = nn.Linear(pi_emb_size, n_acs)
         v_emb_size = v_emb_size or pi_emb_size
@@ -41,7 +46,7 @@ class BasicActorCritic(nn.Module):
 
 
 def mlp_model(env, layer_sizes=[64, 32]):
-    obs_dim = np.prod(env.observation_space.shape)
+    obs_dim = np.prod(env.observation_space.shape[1:])
 
     policy_layers = []
     value_layers = []

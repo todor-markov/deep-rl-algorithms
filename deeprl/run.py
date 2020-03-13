@@ -6,16 +6,15 @@ from functools import partial
 from collections import deque
 import mujoco_py
 
-from baselines import logger
-from baselines.bench import Monitor
-from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
+from gym.vector.async_vector_env import AsyncVectorEnv
+from rllog import logger, Monitor
 
 from torch import optim
 
 from deeprl.models import mlp_model
 from deeprl.rollouts import RolloutGenerator
 from deeprl.a2c import train_a2c
-from deeprl.ppo import train_ppo_clip
+from deeprl.ppo import train_ppo, ppo_clip_update
 
 
 def make_monitored_env(env_name):
@@ -34,7 +33,7 @@ def make_monitored_env(env_name):
 @click.option('--num-mbatch', '-mb', type=int, default=1)
 def main(env, n_envs, rollout_len, n_total_steps, log_interval, algorithm, n_epochs, num_mbatch,
          entcoef=0, gamma=0.99, lam=0.97, kl_threshold=0.075):
-    env = SubprocVecEnv([partial(make_monitored_env, env) for _ in range(n_envs)])
+    env = AsyncVectorEnv([partial(make_monitored_env, env) for _ in range(n_envs)])
 
     model = mlp_model(env)
     rollout_generator = RolloutGenerator(model, env, gamma=gamma, lam=lam)
@@ -55,18 +54,9 @@ def main(env, n_envs, rollout_len, n_total_steps, log_interval, algorithm, n_epo
             train_info = train_a2c(model, optimizer, obs, acs, advs, vtargs)
 
         if algorithm == 'ppo_clip':
-            for _ in range(n_epochs):
-                for i in range(num_mbatch):
-                    mb_obs = obs[i * mbatch_size: (i+1) * mbatch_size]
-                    mb_acs = acs[i * mbatch_size: (i+1) * mbatch_size]
-                    mb_advs = advs[i * mbatch_size: (i+1) * mbatch_size]
-                    mb_vtargs = vtargs[i * mbatch_size: (i+1) * mbatch_size]
-                    mb_old_ac_logps = old_ac_logps[i * mbatch_size: (i+1) * mbatch_size]
-                    train_info = train_ppo_clip(model, optimizer, mb_obs, mb_acs, mb_advs,
-                                                mb_vtargs, mb_old_ac_logps, entcoef=entcoef)
-
-                if train_info['kl_divergence'] > kl_threshold:
-                    break
+            train_info = train_ppo(model, optimizer, obs, acs, advs, vtargs, old_ac_logps,
+                                   n_epochs=n_epochs, n_mbatch=num_mbatch, loss='clip',
+                                   entcoef=entcoef, kl_threshold=kl_threshold)
 
         n_steps_per_second.append(n_batch / (time.time() - update_start_time))
         if update % log_interval == 0:

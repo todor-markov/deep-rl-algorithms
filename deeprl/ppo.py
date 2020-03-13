@@ -1,8 +1,42 @@
+import numpy as np
 import torch as th
 
 
-def train_ppo_clip(model, optimizer, obs, acs, advs, vtargs, old_ac_logps,
-                   clip_eps=0.2, vfcoef=0.5, entcoef=0.01):
+def train_ppo(model, optimizer,
+              obs, acs, advs, vtargs, old_ac_logps,
+              n_epochs=3, n_mbatch=1, loss='clip',
+              vfcoef=0.5, entcoef=0.01, kl_threshold=np.inf, **update_kwargs):
+    
+    batch_size = obs.shape[0]
+    mbatch_size = int(batch_size / n_mbatch)
+    for _ in range(n_epochs):
+        shuffle_idxs = np.random.permutation(batch_size)
+        obs, acs, advs, vtargs, old_ac_logps = map(
+            lambda x: x[shuffle_idxs],
+            [obs, acs, advs, vtargs, old_ac_logps])
+        for i in range(n_mbatch):
+            mb_obs, mb_acs, mb_advs, mb_vtargs, mb_old_ac_logps = map(
+                lambda x: x[i * mbatch_size : (i+1) * mbatch_size],
+                [obs, acs, advs, vtargs, old_ac_logps])
+
+            if loss == 'clip':
+                train_info = ppo_clip_update(model, optimizer,
+                                             mb_obs, mb_acs, mb_advs, mb_vtargs, mb_old_ac_logps,
+                                             vfcoef, entcoef, **update_kwargs)
+
+            elif loss == 'klpen':
+                raise NotImplementedError('PPO KL penalty loss not yet implemented')
+            else:
+                raise ValueError('loss must either be "clip" or "klpen"')
+
+        if train_info['kl_divergence'] > kl_threshold:
+            break
+
+    return train_info
+
+
+def ppo_clip_update(model, optimizer, obs, acs, advs, vtargs, old_ac_logps,
+                    vfcoef=0.5, entcoef=0.01, clip_eps=0.2):
 
     pd, vpreds = model.forward(obs)
     ac_logps = pd.log_prob(acs).unsqueeze(-1)
